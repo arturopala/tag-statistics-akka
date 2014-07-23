@@ -30,6 +30,7 @@ class DirectoryWatchActor extends Actor with ActorLogging {
 
 class FileSystemWatcherWorker(val fileSystem:FileSystem) extends Actor with ActorLogging {
   
+  val log = 
   val watchService = fileSystem.newWatchService()
   val observers = scala.collection.mutable.Map[Path, List[ActorRef]]().withDefaultValue(Nil)
   
