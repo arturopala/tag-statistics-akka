@@ -31,55 +31,97 @@ class DirectoryWatchActor extends Actor with ActorLogging {
       } else {
         val fileSystem = path.getFileSystem()
         val worker = workerMap.getOrElseUpdate(fileSystem, {
-          context.actorOf(Props(classOf[FileSystemWatcherWorker], fileSystem))
+          val newWorker = context.actorOf(Props(classOf[FileSystemWorker], fileSystem), "worker-"+fileSystem.toString)
+          context.watch(newWorker)
+          newWorker
         })
-        worker.forward(message);
+        worker.forward(message)
       }
+    }
+    case message @ Messages.UnwatchPath(path) => {
+      val fileSystem = path.getFileSystem()
+      workerMap.get(fileSystem) foreach { _.forward(message) }
+    }
+    case Terminated(that) => {
+      workerMap find {case (_,ref) => ref == that} foreach {case (fs,_) => workerMap.remove(fs)}
     }
   }
 
 }
 
-/** Actor's worker responsible for watching file events from selected filesystem */
-class FileSystemWatcherWorker(val fileSystem: FileSystem) extends Actor with ActorLogging {
-
-  val observers = scala.collection.mutable.Map[Path, List[ActorRef]]().withDefaultValue(Nil)
-  var worker = context.actorOf(Props(classOf[WatchServiceWorker], fileSystem.newWatchService(), observers))
+/** Actor's worker responsible for watching file events from specified filesystem */
+class FileSystemWorker(val fileSystem: FileSystem) extends Actor with ActorLogging {
+  
+  var observers = Map[Path, Set[ActorRef]]().withDefaultValue(Set())
+  val worker = context.actorOf(Props(classOf[WatchServiceWorker], fileSystem.newWatchService(), observers),"watcher")
 
   def receive = {
-    case message @ Messages.WatchPath(path) if !(observers(path).contains(sender)) => {
-      observers(path) = sender :: observers(path)
-      context.watch(sender) //if sender terminates must then unregister watched path
-      worker.forward(message)
+    case message @ Messages.WatchPath(path) => {
+      if (!(observers(path).contains(sender))){
+	      context.watch(sender) //if sender terminates must then unregister watched path
+	      observers = observers + ((path, observers(path) + sender))
+	      worker ! InternalMessages.RefreshObservers(observers)
+	      worker.forward(message)
+      }
+    }
+    case message @ Messages.UnwatchPath(path) => {
+      if (observers(path).contains(sender)) {
+	      context.unwatch(sender)
+	      worker.forward(message)
+	      val newRefSet = observers(path) - sender
+	      if(newRefSet.isEmpty){
+	        observers = observers - path
+	      } else {
+	        observers = observers + ((path, newRefSet))
+	      }
+	      if(observers.isEmpty){
+	        self ! PoisonPill
+	      } else {
+	        worker ! InternalMessages.RefreshObservers(observers)
+	      }
+      }
     }
     case Terminated(that) => {
-      observers.find {
-        case (path,refs) => refs.contains(that)
+      observers filter {
+        case (_, refs) => refs.contains(that)
       } foreach {
         case (path, _) => self ! (Messages.UnwatchPath(path), that)
       }
     }
   }
+  
 }
 
-object WatchServiceWorker {
+object InternalMessages {
+  case class RefreshObservers(newObservers: Map[Path, Set[ActorRef]])
   case class ListeningFailed(exception: Throwable)
 }
 
-/** Actor's worker directly responsible for watching file events */
-class WatchServiceWorker(val watchService: WatchService, val observers: scala.collection.Map[Path, List[ActorRef]]) extends Actor with ActorLogging {
+/** Actor's worker directly responsible for watching file events, manages watching loop in the separate thread */
+class WatchServiceWorker(val watchService: WatchService, initialObservers: Map[Path, Set[ActorRef]]) extends Actor with ActorLogging {
   import java.nio.file.StandardWatchEventKinds._
 
   val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
   val watchKey2PathMap = scala.collection.mutable.Map[WatchKey, Path]()
   
+  var observers = initialObservers
+  
   def receive = {
+    case InternalMessages.RefreshObservers(newObservers) => { observers = newObservers }
     case Messages.WatchPath(path) => {
       val watchKey = path.register(watchService, ENTRY_CREATE, ENTRY_DELETE, ENTRY_MODIFY)
       watchKey2PathMap(watchKey) = path
       sender ! Messages.WatchPathAck(path)
     }
-    case WatchServiceWorker.ListeningFailed(exception) => throw new RuntimeException(exception)
+    case Messages.UnwatchPath(path) => {
+      watchKey2PathMap filter {case (_,p) => p == path} foreach {
+        case (key,_) => {
+          key.cancel()
+          watchKey2PathMap.remove(key)
+        }
+      }
+    }
+    case InternalMessages.ListeningFailed(exception) => throw new RuntimeException(exception)
   }
 
   def watch = {
@@ -108,7 +150,7 @@ class WatchServiceWorker(val watchService: WatchService, val observers: scala.co
     }
     catch {
       case e: InterruptedException =>
-      case e: Throwable => self ! WatchServiceWorker.ListeningFailed(e)
+      case e: Throwable => self ! InternalMessages.ListeningFailed(e)
     }
   }
 
