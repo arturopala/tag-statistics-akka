@@ -31,7 +31,7 @@ class DirectoryWatchActor extends Actor with ActorLogging {
       } else {
         val fileSystem = path.getFileSystem()
         val worker = workerMap.getOrElseUpdate(fileSystem, {
-          val newWorker = context.actorOf(Props(classOf[FileSystemWorker], fileSystem), "worker-"+fileSystem.toString)
+          val newWorker = context.actorOf(Props(classOf[DirectoryWatchWorker], fileSystem), "worker-"+fileSystem.toString)
           context.watch(newWorker)
           newWorker
         })
@@ -50,7 +50,7 @@ class DirectoryWatchActor extends Actor with ActorLogging {
 }
 
 /** Actor's worker responsible for watching file events from specified filesystem */
-class FileSystemWorker(val fileSystem: FileSystem) extends Actor with ActorLogging {
+class DirectoryWatchWorker(val fileSystem: FileSystem) extends Actor with ActorLogging {
   
   var observers = Map[Path, Set[ActorRef]]().withDefaultValue(Set())
   val worker = context.actorOf(Props(classOf[WatchServiceWorker], fileSystem.newWatchService(), observers),"watcher")
@@ -107,7 +107,9 @@ class WatchServiceWorker(val watchService: WatchService, initialObservers: Map[P
   var observers = initialObservers
   
   def receive = {
-    case InternalMessages.RefreshObservers(newObservers) => { observers = newObservers }
+    case InternalMessages.RefreshObservers(newObservers) => { 
+      observers = newObservers 
+    }
     case Messages.WatchPath(path) => {
       val watchKey = path.register(watchService, ENTRY_CREATE, ENTRY_DELETE, ENTRY_MODIFY)
       watchKey2PathMap(watchKey) = path
