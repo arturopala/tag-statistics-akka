@@ -1,44 +1,45 @@
-package org.encalmo.tagstatisticsakka
+package org.encalmo.tagstatisticsakka.fileswatch
 
 import org.scalatest.{ BeforeAndAfterAll, FlatSpecLike, Matchers }
 import akka.actor.{ Actor, Props, ActorSystem }
 import akka.testkit.{ ImplicitSender, TestKit, TestActorRef }
 import scala.concurrent.duration._
 import Messages._
-import InternalMessages._
-import java.nio.file.{Path,FileSystems}
+import Messages.Internal._
+import java.nio.file.{Path,FileSystems,Files}
 
-class DirectoryWatchActorSpec(_system: ActorSystem) extends TestKit(_system)
+class FilesWatchActorSpec(_system: ActorSystem) extends TestKit(_system)
   with ImplicitSender
   with Matchers
   with FlatSpecLike
   with BeforeAndAfterAll {
   
-  val testPath = FileSystems.getDefault().getPath("target/testdata")
+  val testPath = FileSystems.getDefault.getPath("target/testdata")
   val testPath2 = testPath.resolve("2")
 
-  def this() = this(ActorSystem("DirectoryWatchActorSpec"))
+  def this() = this(ActorSystem("FilesWatchActorSpec"))
   
   override def beforeAll: Unit = {
-    testPath.toFile().mkdirs()
-    testPath2.toFile().mkdirs()
+    Files.createDirectories(testPath)
+    Files.createDirectories(testPath2)
   }
 
   override def afterAll: Unit = {
     TestKit.shutdownActorSystem(system)
   }
   
-  "An WatchServiceWorker" should "be able to register watch of a directory path" in {
-    val fileSystem = testPath.getFileSystem()
-    val tested = TestActorRef(new WatchServiceWorker(fileSystem.newWatchService(), Map()))
+  "A FilesWatchService" should "be able to register new watch of a directory path" in {
+    val fileSystem = testPath.getFileSystem
+    val tested = TestActorRef(new FilesWatchService(fileSystem.newWatchService(), Map()))
     tested ! WatchPath(testPath)
+    expectMsg(WatchPathAck(testPath))
     tested.underlyingActor.watchKey2PathMap should contain value (testPath)
     tested.underlyingActor.observers should not be (null)
   }
   
-  it should "be able to refresh map of observers" in {
-    val fileSystem = testPath.getFileSystem()
-    val tested = TestActorRef(new WatchServiceWorker(fileSystem.newWatchService(), Map()))
+  it should "be able to refresh map of observers (actors)" in {
+    val fileSystem = testPath.getFileSystem
+    val tested = TestActorRef(new FilesWatchService(fileSystem.newWatchService(), Map()))
     val dummyRef1, dummyRef2, dummyRef3 = _system.actorOf(Props.empty)
     tested ! RefreshObservers(Map(testPath -> Set(dummyRef1,dummyRef2,dummyRef3)))
     tested.underlyingActor.observers should contain key (testPath)
@@ -47,47 +48,54 @@ class DirectoryWatchActorSpec(_system: ActorSystem) extends TestKit(_system)
     tested.underlyingActor.observers(testPath) should contain (dummyRef3)
   }
   
-  it should "be able to unregister previous watch" in {
-    val fileSystem = testPath.getFileSystem()
-    val tested = TestActorRef(new WatchServiceWorker(fileSystem.newWatchService(), Map()))
+  it should "be able to unregister previously watched path" in {
+    val fileSystem = testPath.getFileSystem
+    val tested = TestActorRef(new FilesWatchService(fileSystem.newWatchService(), Map()))
     tested ! WatchPath(testPath)
+    expectMsg(WatchPathAck(testPath))
     tested.underlyingActor.watchKey2PathMap should contain value (testPath)
     tested.underlyingActor.observers should not be (null)
     tested ! UnwatchPath(testPath)
+    expectMsg(UnwatchPathAck(testPath))
     tested.underlyingActor.watchKey2PathMap should be ('empty)
     tested.underlyingActor.observers should not be (null)
   }
   
-  it should "generate file creation events" in {
-    val fileSystem = testPath.getFileSystem()
-    val tested = TestActorRef(new WatchServiceWorker(fileSystem.newWatchService(), Map()))
+  it should "generate file creation event for newly created file" in {
+    val fileSystem = testPath.getFileSystem
+    val tested = TestActorRef(new FilesWatchService(fileSystem.newWatchService(), Map()))
+    
 
     tested ! WatchPath(testPath)
     tested.underlyingActor.watchKey2PathMap should contain value (testPath)
     tested.underlyingActor.observers should not be (null)
     
+    val testFilePath = Files.createTempFile(testPath,"test","")
+
+    expectMsg(WatchPathAck(testPath))
+    
   }
   
-  "An DirectoryWatchWorker" should "be able to register watch of a directory path" in {
-    val fileSystem = testPath.getFileSystem()
-    val tested = TestActorRef(new DirectoryWatchWorker(fileSystem))
+  "A FilesWatchActorWorker" should "be able to register new watch of a directory path" in {
+    val fileSystem = testPath.getFileSystem
+    val tested = TestActorRef(new FilesWatchActorWorker(fileSystem))
     tested ! WatchPath(testPath)
     tested.underlyingActor.observers should contain key (testPath)
     tested.underlyingActor.worker should not be (null)
   }
   
-  it should "be able to unregister previous single watch and terminate" in {
-    val fileSystem = testPath.getFileSystem()
-    val tested = TestActorRef(new DirectoryWatchWorker(fileSystem))
+  it should "be able to unregister previously watched path and terminate" in {
+    val fileSystem = testPath.getFileSystem
+    val tested = TestActorRef(new FilesWatchActorWorker(fileSystem))
     tested ! WatchPath(testPath)
     tested.underlyingActor.observers should contain key (testPath)
     tested ! UnwatchPath(testPath)
     tested should be a 'isTerminated
   }
   
-  it should "be able to unregister previous watch and stay live" in {
-    val fileSystem = testPath.getFileSystem()
-    val tested = TestActorRef(new DirectoryWatchWorker(fileSystem))
+  it should "be able to unregister previously watched path and stay alive" in {
+    val fileSystem = testPath.getFileSystem
+    val tested = TestActorRef(new FilesWatchActorWorker(fileSystem))
     tested ! WatchPath(testPath)
     tested ! WatchPath(testPath2)
     tested.underlyingActor.observers should contain key (testPath)
@@ -97,8 +105,8 @@ class DirectoryWatchActorSpec(_system: ActorSystem) extends TestKit(_system)
     tested should not be 'isTerminated
   }
 
-  "An DirectoryWatchActor" should "be able to register watch of a directory path" in {
-    val tested = TestActorRef(new DirectoryWatchActor)
+  "A FilesWatchActor" should "be able to register new watch of a directory path" in {
+    val tested = TestActorRef(new FilesWatchActor)
     tested ! WatchPath(testPath)
     tested.underlyingActor.workerMap should contain key (testPath.getFileSystem())
   }

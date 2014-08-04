@@ -1,4 +1,4 @@
-package org.encalmo.tagstatisticsakka
+package org.encalmo.tagstatisticsakka.fileswatch
 
 import akka.actor.{ Actor, ActorRef, Props, ActorSystem, ActorLogging,Terminated,PoisonPill }
 import java.nio.file.{ Path, FileSystem, WatchKey, WatchService }
@@ -16,22 +16,27 @@ object Messages {
   case class FileCreated(path: Path) extends Event
   case class FileModified(path: Path) extends Event
   case class FileDeleted(path: Path) extends Event
+  
+  object Internal {
+    case class RefreshObservers(newObservers: Map[Path, Set[ActorRef]])
+    case class ListeningFailed(exception: Throwable)
+  }
 }
 
 /** Actor responsible for watching file events (created, modified, deleted) on registered paths */
-class DirectoryWatchActor extends Actor with ActorLogging {
+class FilesWatchActor extends Actor with ActorLogging {
 
   val workerMap = scala.collection.mutable.Map[FileSystem, ActorRef]()
 
   def receive = {
     case message @ Messages.WatchPath(path) => {
-      val file = path.toFile()
-      if (!file.exists() || !file.isDirectory()) {
+      val file = path.toFile
+      if (!file.exists() || !file.isDirectory) {
         sender ! Messages.WatchPathNotValid(path)
       } else {
-        val fileSystem = path.getFileSystem()
+        val fileSystem = path.getFileSystem
         val worker = workerMap.getOrElseUpdate(fileSystem, {
-          val newWorker = context.actorOf(Props(classOf[DirectoryWatchWorker], fileSystem), "worker-"+fileSystem.toString)
+          val newWorker = context.actorOf(Props(classOf[FilesWatchActorWorker], fileSystem), "worker-"+fileSystem.toString)
           context.watch(newWorker)
           newWorker
         })
@@ -39,7 +44,7 @@ class DirectoryWatchActor extends Actor with ActorLogging {
       }
     }
     case message @ Messages.UnwatchPath(path) => {
-      val fileSystem = path.getFileSystem()
+      val fileSystem = path.getFileSystem
       workerMap.get(fileSystem) foreach { _.forward(message) }
     }
     case Terminated(that) => {
@@ -50,17 +55,17 @@ class DirectoryWatchActor extends Actor with ActorLogging {
 }
 
 /** Actor's worker responsible for watching file events from specified filesystem */
-class DirectoryWatchWorker(val fileSystem: FileSystem) extends Actor with ActorLogging {
+class FilesWatchActorWorker(val fileSystem: FileSystem) extends Actor with ActorLogging {
   
   var observers = Map[Path, Set[ActorRef]]().withDefaultValue(Set())
-  val worker = context.actorOf(Props(classOf[WatchServiceWorker], fileSystem.newWatchService(), observers),"watcher")
+  val worker = context.actorOf(Props(classOf[FilesWatchService], fileSystem.newWatchService(), observers),"watcher")
 
   def receive = {
     case message @ Messages.WatchPath(path) => {
       if (!(observers(path).contains(sender))){
 	      context.watch(sender) //if sender terminates must then unregister watched path
 	      observers = observers + ((path, observers(path) + sender))
-	      worker ! InternalMessages.RefreshObservers(observers)
+	      worker ! Messages.Internal.RefreshObservers(observers)
 	      worker.forward(message)
       }
     }
@@ -77,7 +82,7 @@ class DirectoryWatchWorker(val fileSystem: FileSystem) extends Actor with ActorL
 	      if(observers.isEmpty){
 	        self ! PoisonPill
 	      } else {
-	        worker ! InternalMessages.RefreshObservers(observers)
+	        worker ! Messages.Internal.RefreshObservers(observers)
 	      }
       }
     }
@@ -92,13 +97,8 @@ class DirectoryWatchWorker(val fileSystem: FileSystem) extends Actor with ActorL
   
 }
 
-object InternalMessages {
-  case class RefreshObservers(newObservers: Map[Path, Set[ActorRef]])
-  case class ListeningFailed(exception: Throwable)
-}
-
-/** Actor's worker directly responsible for watching file events, manages watching loop in the separate thread */
-class WatchServiceWorker(val watchService: WatchService, initialObservers: Map[Path, Set[ActorRef]]) extends Actor with ActorLogging {
+/** Actor's service directly responsible for watching file events, manages watching loop in the separate thread */
+class FilesWatchService(val watchService: WatchService, initialObservers: Map[Path, Set[ActorRef]]) extends Actor with ActorLogging {
   import java.nio.file.StandardWatchEventKinds._
 
   val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
@@ -107,23 +107,20 @@ class WatchServiceWorker(val watchService: WatchService, initialObservers: Map[P
   var observers = initialObservers
   
   def receive = {
-    case InternalMessages.RefreshObservers(newObservers) => { 
-      observers = newObservers 
-    }
-    case Messages.WatchPath(path) => {
+    case Messages.Internal.RefreshObservers(newObservers) =>
+      observers = newObservers
+    case Messages.WatchPath(path) =>
       val watchKey = path.register(watchService, ENTRY_CREATE, ENTRY_DELETE, ENTRY_MODIFY)
       watchKey2PathMap(watchKey) = path
       sender ! Messages.WatchPathAck(path)
-    }
-    case Messages.UnwatchPath(path) => {
+    case Messages.UnwatchPath(path) =>
       watchKey2PathMap filter {case (_,p) => p == path} foreach {
         case (key,_) => {
           key.cancel()
           watchKey2PathMap.remove(key)
         }
       }
-    }
-    case InternalMessages.ListeningFailed(exception) => throw new RuntimeException(exception)
+    case Messages.Internal.ListeningFailed(exception) => throw new RuntimeException(exception)
   }
 
   def watch = {
@@ -152,7 +149,7 @@ class WatchServiceWorker(val watchService: WatchService, initialObservers: Map[P
     }
     catch {
       case e: InterruptedException =>
-      case e: Throwable => self ! InternalMessages.ListeningFailed(e)
+      case e: Throwable => self ! Messages.Internal.ListeningFailed(e)
     }
   }
 
