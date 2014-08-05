@@ -19,7 +19,7 @@ object Messages {
   
   object Internal {
     case class RefreshObservers(newObservers: Map[Path, Set[ActorRef]])
-    case class ListeningFailed(exception: Throwable)
+    case class WatchThreadFailed(exception: Throwable) extends Failure
   }
 }
 
@@ -115,12 +115,12 @@ class FilesWatchService(val watchService: WatchService, initialObservers: Map[Pa
       sender ! Messages.WatchPathAck(path)
     case Messages.UnwatchPath(path) =>
       watchKey2PathMap filter {case (_,p) => p == path} foreach {
-        case (key,_) => {
+        case (key,path) =>
           key.cancel()
           watchKey2PathMap.remove(key)
-        }
+          sender ! Messages.UnwatchPathAck(path)
       }
-    case Messages.Internal.ListeningFailed(exception) => throw new RuntimeException(exception)
+    case Messages.Internal.WatchThreadFailed(exception) => throw new RuntimeException(exception)
   }
 
   def watch = {
@@ -149,7 +149,7 @@ class FilesWatchService(val watchService: WatchService, initialObservers: Map[Pa
     }
     catch {
       case e: InterruptedException =>
-      case e: Throwable => self ! Messages.Internal.ListeningFailed(e)
+      case e: Throwable => self ! Messages.Internal.WatchThreadFailed(e)
     }
   }
 
