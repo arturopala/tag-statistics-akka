@@ -1,4 +1,4 @@
-package org.encalmo.tagstatisticsakka.fileswatch
+package code.arturopala.tagstatisticsakka.fileswatch
 
 import org.scalatest.{ BeforeAndAfterAll, FlatSpecLike, Matchers }
 import akka.actor.{ Actor, Props, ActorSystem }
@@ -81,7 +81,7 @@ class FilesWatchActorSpec(_system: ActorSystem) extends TestKit(_system)
     val tested = TestActorRef(new FilesWatchActorWorker(fileSystem))
     tested ! WatchPath(testPath)
     tested.underlyingActor.observers should contain key (testPath)
-    tested.underlyingActor.worker should not be (null)
+    tested.underlyingActor.watcher should not be (null)
   }
   
   it should "be able to unregister previously watched path and terminate" in {

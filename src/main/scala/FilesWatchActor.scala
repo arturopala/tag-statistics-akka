@@ -1,4 +1,4 @@
-package org.encalmo.tagstatisticsakka.fileswatch
+package code.arturopala.tagstatisticsakka.fileswatch
 
 import akka.actor.{ Actor, ActorRef, Props, ActorSystem, ActorLogging,Terminated,PoisonPill }
 import java.nio.file.{ Path, FileSystem, WatchKey, WatchService }
@@ -8,11 +8,13 @@ object Messages {
   trait Failure
   trait Command
   trait Event
+  // path commands
   case class WatchPath(path: Path) extends Command
   case class UnwatchPath(path: Path) extends Command
   case class WatchPathAck(path: Path) extends Event
   case class UnwatchPathAck(path: Path) extends Event
   case class WatchPathNotValid(path: Path) extends Event with Failure
+  // file events
   case class FileCreated(path: Path) extends Event
   case class FileModified(path: Path) extends Event
   case class FileDeleted(path: Path) extends Event
@@ -58,21 +60,21 @@ class FilesWatchActor extends Actor with ActorLogging {
 class FilesWatchActorWorker(val fileSystem: FileSystem) extends Actor with ActorLogging {
   
   var observers = Map[Path, Set[ActorRef]]().withDefaultValue(Set())
-  val worker = context.actorOf(Props(classOf[FilesWatchService], fileSystem.newWatchService(), observers),"watcher")
+  val watcher = context.actorOf(Props(classOf[FilesWatchService], fileSystem.newWatchService(), observers),"watcher")
 
   def receive = {
     case message @ Messages.WatchPath(path) => {
       if (!(observers(path).contains(sender))){
 	      context.watch(sender) //if sender terminates must then unregister watched path
 	      observers = observers + ((path, observers(path) + sender))
-	      worker ! Messages.Internal.RefreshObservers(observers)
-	      worker.forward(message)
+	      watcher ! Messages.Internal.RefreshObservers(observers)
+	      watcher.forward(message)
       }
     }
     case message @ Messages.UnwatchPath(path) => {
       if (observers(path).contains(sender)) {
 	      context.unwatch(sender)
-	      worker.forward(message)
+	      watcher.forward(message)
 	      val newRefSet = observers(path) - sender
 	      if(newRefSet.isEmpty){
 	        observers = observers - path
@@ -82,7 +84,7 @@ class FilesWatchActorWorker(val fileSystem: FileSystem) extends Actor with Actor
 	      if(observers.isEmpty){
 	        self ! PoisonPill
 	      } else {
-	        worker ! Messages.Internal.RefreshObservers(observers)
+	        watcher ! Messages.Internal.RefreshObservers(observers)
 	      }
       }
     }
