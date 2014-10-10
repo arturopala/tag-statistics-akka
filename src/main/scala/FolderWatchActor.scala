@@ -26,7 +26,7 @@ object Messages {
 }
 
 /** Actor responsible for watching file events (created, modified, deleted) on registered paths */
-class FilesWatchActor extends Actor with ActorLogging {
+class FolderWatchActor extends Actor with ActorLogging {
 
   val workerMap = scala.collection.mutable.Map[FileSystem, ActorRef]()
 
@@ -38,7 +38,7 @@ class FilesWatchActor extends Actor with ActorLogging {
       } else {
         val fileSystem = path.getFileSystem
         val worker = workerMap.getOrElseUpdate(fileSystem, {
-          val newWorker = context.actorOf(Props(classOf[FilesWatchActorWorker], fileSystem), "worker-"+fileSystem.toString)
+          val newWorker = context.actorOf(Props(classOf[FolderWatchActorWorker], fileSystem), "worker-"+fileSystem.toString)
           context.watch(newWorker)
           newWorker
         })
@@ -57,10 +57,10 @@ class FilesWatchActor extends Actor with ActorLogging {
 }
 
 /** Actor's worker responsible for watching file events from specified filesystem */
-class FilesWatchActorWorker(val fileSystem: FileSystem) extends Actor with ActorLogging {
+class FolderWatchActorWorker(val fileSystem: FileSystem) extends Actor with ActorLogging {
   
   var observers = Map[Path, Set[ActorRef]]().withDefaultValue(Set())
-  val watcher = context.actorOf(Props(classOf[FilesWatchService], fileSystem.newWatchService(), observers),"watcher")
+  val watcher = context.actorOf(Props(classOf[FolderWatchService], fileSystem.newWatchService(), observers),"watcher")
 
   def receive = {
     case message @ Messages.WatchPath(path) => {
@@ -100,7 +100,7 @@ class FilesWatchActorWorker(val fileSystem: FileSystem) extends Actor with Actor
 }
 
 /** Actor's service directly responsible for watching file events, manages watching loop in the separate thread */
-class FilesWatchService(val watchService: WatchService, initialObservers: Map[Path, Set[ActorRef]]) extends Actor with ActorLogging {
+class FolderWatchService(val watchService: WatchService, initialObservers: Map[Path, Set[ActorRef]]) extends Actor with ActorLogging {
   import java.nio.file.StandardWatchEventKinds._
 
   val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
