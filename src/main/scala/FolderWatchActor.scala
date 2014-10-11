@@ -111,21 +111,26 @@ class FolderWatchService(val watchService: WatchService, initialObservers: Map[P
   def receive = {
     case Messages.Internal.RefreshObservers(newObservers) =>
       observers = newObservers
-    case Messages.WatchPath(path) =>
+    case Messages.WatchPath(path) => {
       val watchKey = path.register(watchService, ENTRY_CREATE, ENTRY_DELETE, ENTRY_MODIFY)
       watchKey2PathMap(watchKey) = path
       sender ! Messages.WatchPathAck(path)
-    case Messages.UnwatchPath(path) =>
-      watchKey2PathMap filter {case (_,p) => p == path} foreach {
-        case (key,path) =>
+      log.info(s"Folder watch registered: $path")
+    }
+    case Messages.UnwatchPath(path) => {
+      watchKey2PathMap filter { case (_, p) => p == path} foreach {
+        case (key, path) => {
           key.cancel()
           watchKey2PathMap.remove(key)
           sender ! Messages.UnwatchPathAck(path)
+          log.info(s"Folder watch removed: $path")
+        }
       }
+    }
     case Messages.Internal.WatchThreadFailed(exception) => throw new RuntimeException(exception)
   }
 
-  def watch = {
+  def watchFolder = {
     import scala.collection.JavaConversions._
     try {
 	    while (!Thread.interrupted()) {
@@ -137,9 +142,18 @@ class FolderWatchService(val watchService: WatchService, initialObservers: Map[P
 	            for (event <- events) {
 	              val file = path.resolve(event.context().asInstanceOf[Path])
 	              event.kind() match {
-	                case ENTRY_CREATE => refs.foreach { _ ! Messages.FileCreated(file) }
-	                case ENTRY_MODIFY => refs.foreach { _ ! Messages.FileModified(file) }
-	                case ENTRY_DELETE => refs.foreach { _ ! Messages.FileDeleted(file) }
+                  case ENTRY_MODIFY => {
+                    log.info(s"File modified: $file")
+                    refs.foreach { _ ! Messages.FileModified(file) }
+                  }
+                  case ENTRY_CREATE => {
+                    log.info(s"File created: $file")
+                    refs.foreach { _ ! Messages.FileCreated(file) }
+                  }
+	                case ENTRY_DELETE => {
+                    log.info(s"File deleted: $file")
+                    refs.foreach { _ ! Messages.FileDeleted(file) }
+                  }
 	                case _ => //unsupported events
 	              }
 	            }
@@ -160,7 +174,7 @@ class FolderWatchService(val watchService: WatchService, initialObservers: Map[P
     observers.keys foreach {path => self ! Messages.WatchPath(path)}
     //run watching thread
     executor.execute(new Runnable {
-      def run = watch
+      def run = watchFolder
     })
   }
 

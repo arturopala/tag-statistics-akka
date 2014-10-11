@@ -10,9 +10,12 @@ resolvers += "Local Maven Repository" at "file://"+Path.userHome.absolutePath+"/
 
 libraryDependencies ++= Seq(
   "com.typesafe.akka" %% "akka-actor" % "2.3.+" withSources(),
-  "com.typesafe.akka" %% "akka-testkit" % "2.3.+" withSources(),
-  "org.scalatest" %% "scalatest" % "2.+" % "test",
-  "junit" % "junit" % "4.+" % "test",
-  "com.novocode" % "junit-interface" % "0.10" % "test"
+  "com.typesafe.akka" %% "akka-slf4j" % "2.3.+" withSources(),
+  "com.typesafe.akka" %% "akka-testkit" % "2.3.+" % Test withSources(),
+  "org.scalatest" %% "scalatest" % "2.+" % Test,
+  "junit" % "junit" % "4.+" % Test,
+  "com.novocode" % "junit-interface" % "0.10" % Test,
+  "org.slf4j" % "slf4j-api" % "1.7.+",
+  "org.slf4j" % "slf4j-simple" % "1.7.+"
 )
 
