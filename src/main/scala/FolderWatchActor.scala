@@ -1,6 +1,6 @@
 package code.arturopala.tagstatisticsakka.fileswatch
 
-import akka.actor.{ Actor, ActorRef, Props, ActorSystem, ActorLogging,Terminated,PoisonPill }
+import akka.actor.{ Actor, ActorRef, Props, ActorSystem, ActorLogging, Terminated, PoisonPill }
 import java.nio.file.{ Path, FileSystem, WatchKey, WatchService }
 
 object Messages {
@@ -18,7 +18,7 @@ object Messages {
   case class FileCreated(path: Path) extends Event
   case class FileModified(path: Path) extends Event
   case class FileDeleted(path: Path) extends Event
-  
+
   object Internal {
     case class RefreshObservers(newObservers: Map[Path, Set[ActorRef]])
     case class WatchThreadFailed(exception: Throwable) extends Failure
@@ -38,7 +38,7 @@ class FolderWatchActor extends Actor with ActorLogging {
       } else {
         val fileSystem = path.getFileSystem
         val worker = workerMap.getOrElseUpdate(fileSystem, {
-          val newWorker = context.actorOf(Props(classOf[FolderWatchActorWorker], fileSystem), "worker-"+fileSystem.toString)
+          val newWorker = context.actorOf(Props(classOf[FolderWatchActorWorker], fileSystem), "worker-" + fileSystem.toString)
           context.watch(newWorker)
           newWorker
         })
@@ -50,7 +50,7 @@ class FolderWatchActor extends Actor with ActorLogging {
       workerMap.get(fileSystem) foreach { _.forward(message) }
     }
     case Terminated(that) => {
-      workerMap find {case (_,ref) => ref == that} foreach {case (fs,_) => workerMap.remove(fs)}
+      workerMap find { case (_, ref) => ref == that } foreach { case (fs, _) => workerMap.remove(fs) }
     }
   }
 
@@ -58,34 +58,34 @@ class FolderWatchActor extends Actor with ActorLogging {
 
 /** Actor's worker responsible for watching file events from specified filesystem */
 class FolderWatchActorWorker(val fileSystem: FileSystem) extends Actor with ActorLogging {
-  
+
   var observers = Map[Path, Set[ActorRef]]().withDefaultValue(Set())
-  val watcher = context.actorOf(Props(classOf[FolderWatchService], fileSystem.newWatchService(), observers),"watcher")
+  val watcher = context.actorOf(Props(classOf[FolderWatchService], fileSystem.newWatchService(), observers), "watcher")
 
   def receive = {
     case message @ Messages.WatchPath(path) => {
-      if (!(observers(path).contains(sender))){
-	      context.watch(sender) //if sender terminates must then unregister watched path
-	      observers = observers + ((path, observers(path) + sender))
-	      watcher ! Messages.Internal.RefreshObservers(observers)
-	      watcher.forward(message)
+      if (!(observers(path).contains(sender))) {
+        context.watch(sender) //if sender terminates must then unregister watched path
+        observers = observers + ((path, observers(path) + sender))
+        watcher ! Messages.Internal.RefreshObservers(observers)
+        watcher.forward(message)
       }
     }
     case message @ Messages.UnwatchPath(path) => {
       if (observers(path).contains(sender)) {
-	      context.unwatch(sender)
-	      watcher.forward(message)
-	      val newRefSet = observers(path) - sender
-	      if(newRefSet.isEmpty){
-	        observers = observers - path
-	      } else {
-	        observers = observers + ((path, newRefSet))
-	      }
-	      if(observers.isEmpty){
-	        self ! PoisonPill
-	      } else {
-	        watcher ! Messages.Internal.RefreshObservers(observers)
-	      }
+        context.unwatch(sender)
+        watcher.forward(message)
+        val newRefSet = observers(path) - sender
+        if (newRefSet.isEmpty) {
+          observers = observers - path
+        } else {
+          observers = observers + ((path, newRefSet))
+        }
+        if (observers.isEmpty) {
+          self ! PoisonPill
+        } else {
+          watcher ! Messages.Internal.RefreshObservers(observers)
+        }
       }
     }
     case Terminated(that) => {
@@ -96,7 +96,7 @@ class FolderWatchActorWorker(val fileSystem: FileSystem) extends Actor with Acto
       }
     }
   }
-  
+
 }
 
 /** Actor's service directly responsible for watching file events, manages watching loop in the separate thread */
@@ -105,9 +105,9 @@ class FolderWatchService(val watchService: WatchService, initialObservers: Map[P
 
   val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
   val watchKey2PathMap = scala.collection.mutable.Map[WatchKey, Path]()
-  
+
   var observers = initialObservers
-  
+
   def receive = {
     case Messages.Internal.RefreshObservers(newObservers) =>
       observers = newObservers
@@ -115,15 +115,13 @@ class FolderWatchService(val watchService: WatchService, initialObservers: Map[P
       val watchKey = path.register(watchService, ENTRY_CREATE, ENTRY_DELETE, ENTRY_MODIFY)
       watchKey2PathMap(watchKey) = path
       sender ! Messages.WatchPathAck(path)
-      log.info(s"Folder watch registered: $path")
     }
     case Messages.UnwatchPath(path) => {
-      watchKey2PathMap filter { case (_, p) => p == path} foreach {
+      watchKey2PathMap filter { case (_, p) => p == path } foreach {
         case (key, path) => {
           key.cancel()
           watchKey2PathMap.remove(key)
           sender ! Messages.UnwatchPathAck(path)
-          log.info(s"Folder watch removed: $path")
         }
       }
     }
@@ -133,37 +131,33 @@ class FolderWatchService(val watchService: WatchService, initialObservers: Map[P
   def watchFolder = {
     import scala.collection.JavaConversions._
     try {
-	    while (!Thread.interrupted()) {
-	      val nextKey = watchService.poll(100, java.util.concurrent.TimeUnit.MILLISECONDS)
-	      Option(nextKey) foreach { key =>
-	        watchKey2PathMap.get(key) foreach { path =>
-	          observers.get(path) foreach { refs =>
-	            val events = key.pollEvents()
-	            for (event <- events) {
-	              val file = path.resolve(event.context().asInstanceOf[Path])
-	              event.kind() match {
+      while (!Thread.interrupted()) {
+        val nextKey = watchService.poll(100, java.util.concurrent.TimeUnit.MILLISECONDS)
+        Option(nextKey) foreach { key =>
+          watchKey2PathMap.get(key) foreach { path =>
+            observers.get(path) foreach { refs =>
+              val events = key.pollEvents()
+              for (event <- events) {
+                val file = path.resolve(event.context().asInstanceOf[Path])
+                event.kind() match {
                   case ENTRY_MODIFY => {
-                    log.info(s"File modified: $file")
                     refs.foreach { _ ! Messages.FileModified(file) }
                   }
                   case ENTRY_CREATE => {
-                    log.info(s"File created: $file")
                     refs.foreach { _ ! Messages.FileCreated(file) }
                   }
-	                case ENTRY_DELETE => {
-                    log.info(s"File deleted: $file")
+                  case ENTRY_DELETE => {
                     refs.foreach { _ ! Messages.FileDeleted(file) }
                   }
-	                case _ => //unsupported events
-	              }
-	            }
-	          }
-	        }
-	        key.reset()
-	      }
-	    }
-    }
-    catch {
+                  case _ => //unsupported events
+                }
+              }
+            }
+          }
+          key.reset()
+        }
+      }
+    } catch {
       case e: InterruptedException =>
       case e: Throwable => self ! Messages.Internal.WatchThreadFailed(e)
     }
@@ -171,7 +165,7 @@ class FolderWatchService(val watchService: WatchService, initialObservers: Map[P
 
   override def preStart() = {
     //re-register observers 
-    observers.keys foreach {path => self ! Messages.WatchPath(path)}
+    observers.keys foreach { path => self ! Messages.WatchPath(path) }
     //run watching thread
     executor.execute(new Runnable {
       def run = watchFolder
@@ -179,6 +173,7 @@ class FolderWatchService(val watchService: WatchService, initialObservers: Map[P
   }
 
   override def postStop() = {
+    watchService.close()
     executor.shutdownNow()
   }
 
