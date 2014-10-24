@@ -5,13 +5,13 @@ import java.nio.file.{ FileSystems, Files, Path }
 import java.util.function.Consumer
 import org.junit.runner.RunWith
 import org.scalatest.{ Finders, FlatSpecLike, Matchers }
-import Messages.{ UnwatchPath, UnwatchPathAck, WatchPath, WatchPathAck }
-import Messages.FileCreated
-import Messages.Internal.RefreshObservers
+import FolderWatchActorMessages.{ UnwatchPath, UnwatchPathAck, WatchPath, WatchPathAck, FileCreated }
+import FolderWatchActorMessages.Internal.RefreshObservers
 import akka.actor.{ ActorSystem, Props }
 import akka.testkit.{ ImplicitSender, TestActorRef, TestKit }
 import org.scalatest.junit.JUnitRunner
 import com.typesafe.config.ConfigFactory
+import akka.testkit.TestProbe
 
 @RunWith(classOf[JUnitRunner])
 class FolderWatchActorSpec extends FlatSpecLike with Matchers {
@@ -27,6 +27,7 @@ class FolderWatchActorSpec extends FlatSpecLike with Matchers {
   class ActorsTest extends TestKit(ActorSystem("test", actorSystemConfig)) with ImplicitSender {
 
     val testPath = Files.createTempDirectory(testFolder, "test")
+    val dummyActorRef = system.actorOf(Props.empty)
 
     def createTestFile(folder: Path, fileName: String): Path = {
       val testFilePath = Files.createTempFile(folder, fileName, ".test")
@@ -47,7 +48,7 @@ class FolderWatchActorSpec extends FlatSpecLike with Matchers {
   "A FolderWatchService" should "be able to register new watch of a directory path" in new ActorsTest {
     val fileSystem = testPath.getFileSystem
     val tested = TestActorRef(new FolderWatchService(fileSystem.newWatchService(), Map()))
-    tested ! WatchPath(testPath)
+    tested ! WatchPath(testPath, dummyActorRef)
     expectMsg(WatchPathAck(testPath))
     tested.underlyingActor.watchKey2PathMap should contain value testPath
     tested.underlyingActor.observers should not be null
@@ -57,23 +58,23 @@ class FolderWatchActorSpec extends FlatSpecLike with Matchers {
   it should "be able to refresh map of observers (actors)" in new ActorsTest {
     val fileSystem = testPath.getFileSystem
     val tested = TestActorRef(new FolderWatchService(fileSystem.newWatchService(), Map()))
-    val dummyRef1, dummyRef2, dummyRef3 = system.actorOf(Props.empty)
-    tested ! RefreshObservers(Map(testPath -> Set(dummyRef1, dummyRef2, dummyRef3)))
+    val dummyActorRef2, dummyActorRef3 = system.actorOf(Props.empty)
+    tested ! RefreshObservers(Map(testPath -> Set(dummyActorRef, dummyActorRef2, dummyActorRef3)))
     tested.underlyingActor.observers should contain key testPath
-    tested.underlyingActor.observers(testPath) should contain(dummyRef1)
-    tested.underlyingActor.observers(testPath) should contain(dummyRef2)
-    tested.underlyingActor.observers(testPath) should contain(dummyRef3)
+    tested.underlyingActor.observers(testPath) should contain(dummyActorRef)
+    tested.underlyingActor.observers(testPath) should contain(dummyActorRef2)
+    tested.underlyingActor.observers(testPath) should contain(dummyActorRef3)
     clean
   }
 
   it should "be able to unregister previously watched path" in new ActorsTest {
     val fileSystem = testPath.getFileSystem
     val tested = TestActorRef(new FolderWatchService(fileSystem.newWatchService(), Map()))
-    tested ! WatchPath(testPath)
+    tested ! WatchPath(testPath, dummyActorRef)
     expectMsg(WatchPathAck(testPath))
     tested.underlyingActor.watchKey2PathMap should contain value testPath
     tested.underlyingActor.observers should not be null
-    tested ! UnwatchPath(testPath)
+    tested ! UnwatchPath(testPath, dummyActorRef)
     expectMsg(UnwatchPathAck(testPath))
     tested.underlyingActor.watchKey2PathMap should be('empty)
     tested.underlyingActor.observers should not be null
@@ -82,7 +83,7 @@ class FolderWatchActorSpec extends FlatSpecLike with Matchers {
   "A FolderWatchActorWorker" should "be able to register new watch of a directory path" in new ActorsTest {
     val fileSystem = testPath.getFileSystem
     val tested = TestActorRef(new FolderWatchActorWorker(fileSystem))
-    tested ! WatchPath(testPath)
+    tested ! WatchPath(testPath, dummyActorRef)
     expectMsg(WatchPathAck(testPath))
     tested.underlyingActor.observers should contain key testPath
     tested.underlyingActor.watcher should not be null
@@ -92,9 +93,9 @@ class FolderWatchActorSpec extends FlatSpecLike with Matchers {
   it should "be able to unregister previously watched path and terminate itself" in new ActorsTest {
     val fileSystem = testPath.getFileSystem
     val tested = TestActorRef(new FolderWatchActorWorker(fileSystem))
-    tested ! WatchPath(testPath)
+    tested ! WatchPath(testPath, dummyActorRef)
     expectMsg(WatchPathAck(testPath))
-    tested ! UnwatchPath(testPath)
+    tested ! UnwatchPath(testPath, dummyActorRef)
     expectMsg(UnwatchPathAck(testPath))
     Thread.sleep(200)
     tested should be('isTerminated)
@@ -106,13 +107,13 @@ class FolderWatchActorSpec extends FlatSpecLike with Matchers {
     Files.createDirectories(testPath2)
     val fileSystem = testPath.getFileSystem
     val tested = TestActorRef(new FolderWatchActorWorker(fileSystem))
-    tested ! WatchPath(testPath)
+    tested ! WatchPath(testPath, dummyActorRef)
     expectMsg(WatchPathAck(testPath))
-    tested ! WatchPath(testPath2)
+    tested ! WatchPath(testPath2, dummyActorRef)
     expectMsg(WatchPathAck(testPath2))
     tested.underlyingActor.observers should contain key testPath
     tested.underlyingActor.observers should contain key testPath2
-    tested ! UnwatchPath(testPath)
+    tested ! UnwatchPath(testPath, dummyActorRef)
     expectMsg(UnwatchPathAck(testPath))
     tested.underlyingActor.observers should contain key testPath2
     tested should not be 'isTerminated
@@ -122,26 +123,27 @@ class FolderWatchActorSpec extends FlatSpecLike with Matchers {
 
   "A FolderWatchActor" should "be able to register new watch of a directory path" in new ActorsTest {
     val tested = TestActorRef(new FolderWatchActor)
-    tested ! WatchPath(testPath)
+    tested ! WatchPath(testPath, dummyActorRef)
     tested.underlyingActor.workerMap should contain key testPath.getFileSystem
     expectMsg(WatchPathAck(testPath))
   }
 
   it should "be able to de-register previous watch of a directory path" in new ActorsTest {
     val tested = TestActorRef(new FolderWatchActor)
-    tested ! WatchPath(testPath)
+    tested ! WatchPath(testPath, dummyActorRef)
     expectMsg(WatchPathAck(testPath))
-    tested ! UnwatchPath(testPath)
+    tested ! UnwatchPath(testPath, dummyActorRef)
     expectMsg(UnwatchPathAck(testPath))
     clean
   }
 
   it should "be able to watch file creation" in new ActorsTest {
     val tested = TestActorRef(new FolderWatchActor)
-    tested ! WatchPath(testPath)
+    val probe = TestProbe()
+    tested ! WatchPath(testPath, probe.ref)
     expectMsg(WatchPathAck(testPath))
     val testFilePath = createTestFile(testPath, "test")
-    expectMsg(FileCreated(testFilePath))
+    probe.expectMsg(FileCreated(testFilePath))
     Files.delete(testFilePath)
     clean
   }
